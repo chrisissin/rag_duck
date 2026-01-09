@@ -1,0 +1,81 @@
+{
+  "policies": [
+    {
+      "alert_type": "disk_utilization_low",
+      "name": "Disk Utilization Low Alert",
+      "patterns": [
+        {
+          "type": "regex",
+          "pattern": "Disk utilization for\\s+([a-z0-9\\-]+)\\s+([a-z0-9\\-]+)",
+          "capture_groups": {
+            "project_id": 1,
+            "instance_name": 2
+          }
+        },
+        {
+          "type": "regex",
+          "pattern": "threshold of\\s+(\\d+(?:\\.\\d+)?)\\s+with a value of\\s+(\\d+(?:\\.\\d+)?)",
+          "capture_groups": {
+            "threshold_percent": 1,
+            "value_percent": 2
+          }
+        }
+      ],
+      "extraction_rules": {
+        "alert_type": "disk_utilization_low",
+        "metric_labels": {},
+        "policy_name": null,
+        "condition_name": null,
+        "violation_started_raw": null,
+        "gcp_alert_url": null,
+        "confidence": 0.9,
+        "missing_fields": ["zone", "mig_name"],
+        "parse_method": "policy"
+      },
+      "action_template": "gcloud compute instance-groups managed recreate-instances <MIG> --instances={instance_name} --zone=<ZONE> --project={project_id}",
+      "summary_template": "Disk utilization below threshold. {action}",
+      "sample_texts": [
+        "Disk utilization for project-123 instance-456 threshold of 80.0 with a value of 65.5"
+      ]
+    },
+    {
+      "alert_type": "cpu_utilization_high",
+      "name": "CPU Utilization High Alert",
+      "patterns": [
+        {
+          "type": "regex",
+          "pattern": "CPU utilization for\\s+([a-z0-9\\-]+)\\s+([a-z0-9\\-]+)",
+          "capture_groups": {
+            "project_id": 1,
+            "instance_name": 2
+          }
+        },
+        {
+          "type": "regex",
+          "pattern": "CPU usage\\s+(\\d+(?:\\.\\d+)?)%\\s+exceeds threshold\\s+(\\d+(?:\\.\\d+)?)%",
+          "capture_groups": {
+            "value_percent": 1,
+            "threshold_percent": 2
+          }
+        }
+      ],
+      "extraction_rules": {
+        "alert_type": "cpu_utilization_high",
+        "metric_labels": {},
+        "policy_name": null,
+        "condition_name": null,
+        "violation_started_raw": null,
+        "gcp_alert_url": null,
+        "confidence": 0.9,
+        "missing_fields": ["zone"],
+        "parse_method": "policy"
+      },
+      "action_template": "gcloud compute instances stop {instance_name} --zone=<ZONE> --project={project_id}",
+      "summary_template": "CPU utilization above threshold. {action}",
+      "sample_texts": [
+        "CPU utilization for project-123 instance-456 CPU usage 95.5% exceeds threshold 80.0%"
+      ]
+    }
+  ]
+}
+

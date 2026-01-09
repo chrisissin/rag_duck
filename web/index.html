@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<body>
+<textarea id="t" rows="10" cols="120"></textarea><br/>
+<button onclick="run()">Run</button>
+<pre id="o"></pre>
+<script>
+async function run(){
+ const r=await fetch('/api/analyze',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:document.getElementById('t').value})});
+ document.getElementById('o').textContent=JSON.stringify(await r.json(),null,2);
+}
+</script>
+</body>
+</html>
