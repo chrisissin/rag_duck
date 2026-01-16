@@ -12,6 +12,27 @@ It also includes:
 
 ---
 
+## Usage & Workflow
+
+The following diagram illustrates how the system works for both on-call engineers and platform engineers:
+
+![On-Call Engineer Workflow and Platform Engineer Role](docs/workflow.png)
+
+**On-Call Engineer Workflow:**
+1. Ask a question in Slack by mentioning the bot
+2. The bot uses Local LLM + RAG (no external data) to respond with chat history context
+3. If a policy is triggered, the bot suggests an action and asks for permission via MCP
+4. If no policy is triggered, the bot provides a standard response
+
+**Platform Engineer Role:**
+1. Write policies that parse queries using regex patterns
+2. Define suggested actions when policies are triggered
+3. Optionally write MCP definitions to execute approved actions
+
+> **Security Note**: All processing happens locally - no data is sent to external LLM APIs, ensuring your internal data remains private.
+
+---
+
 ## Why bot token (not your personal user token)?
 
 For the starter: **use a Slack bot token** (`xoxb-...`).
@@ -163,7 +184,22 @@ npm i
    - Type and select: `app_mentions`
    - Click **"Save Changes"** at the bottom of the page
 
-7. **Install App to Workspace**
+7. **Enable Interactivity & Shortcuts** (Required for Button Actions)
+   - Go to **"Interactivity & Shortcuts"** in the left sidebar
+   - Toggle **"Interactivity"** to ON
+   - In the **"Request URL"** field, enter: `https://your-ngrok-url.ngrok.io/slack/events`
+     - Use the same ngrok URL from step 3 (same as Event Subscriptions)
+     - Make sure it ends with `/slack/events`
+   - **Click away from the field** or press Tab - Slack will automatically verify the URL
+   - Wait for the green checkmark ✅ - this means Slack successfully verified your endpoint
+   - If you see an error, check:
+     - ✅ Your bot is running (`npm run bot` in another terminal)
+     - ✅ ngrok is still running and showing the same URL
+     - ✅ The URL format is correct: `https://xxx.ngrok.io/slack/events`
+   - Click **"Save Changes"** at the bottom of the page
+   - **Note**: This enables interactive buttons (like "Search All Channels" and approval buttons)
+
+8. **Install App to Workspace**
    
    **Option A: Install from OAuth & Permissions page**
    - Go back to **"OAuth & Permissions"**

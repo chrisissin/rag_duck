@@ -56,9 +56,27 @@ The project now uses `src/server.js` as the unified entry point that handles:
 │  (decide)      │
 └───────┬────────┘
         │
+        ├── AUTO_REPLACE ──► Execute via MCP (if enabled)
+        │
+        ├── NEEDS_APPROVAL ──► Slack: Request Approval
+        │                      │
+        │                      ├── User Approves ──► Execute via MCP
+        │                      │
+        │                      └── User Rejects ──► Cancel Action
+        │
+        └── NO_ACTION ──► Return message, no action taken
 ┌───────▼────────┐
 │  Format Report │
 │  (formatReport)│
+└───────┬────────┘
+        │
+┌───────▼────────┐
+│  MCP Client    │
+│  (mcpClient)   │
+│  ┌──────────┐  │
+│  │ GCP MCP  │  │
+│  │ Server   │  │
+│  └──────────┘  │
 └────────────────┘
 ```
 
@@ -137,11 +155,28 @@ This design addresses concerns about:
 
 ### 4. Decision Engine (`decision/decide.js`)
 - Makes decisions based on parsed alerts
-- Returns `AUTO_REPLACE` or `NEEDS_APPROVAL`
+- Returns `AUTO_REPLACE`, `NEEDS_APPROVAL`, or `NO_ACTION`
+- **AUTO_REPLACE**: Action is executed immediately via MCP (if enabled)
+- **NEEDS_APPROVAL**: Slack bot requests user approval with interactive buttons
+- **NO_ACTION**: No action is taken, message is returned to user
 
 ### 5. Report Formatter (`report/formatReport.js`)
 - Formats the final report/action
-- Can execute MCP actions if enabled
+- Executes MCP actions automatically if decision is `AUTO_REPLACE` and MCP is enabled
+- For `NEEDS_APPROVAL`, returns action details for Slack approval UI
+
+### 6. Approval Flow (Slack Integration)
+- When decision is `NEEDS_APPROVAL`, Slack bot posts message with approval buttons
+- User can click "✅ Approve & Execute" or "❌ Reject"
+- On approval, action is executed via MCP client
+- On rejection, action is cancelled and message is updated
+
+### 7. MCP Client & Server (`report/mcpClient.js`, `services/automation/gcpMcpServer.js`)
+- **MCP Client**: Communicates with MCP server to execute actions
+- **MCP Server**: GCP automation server running as a local service
+  - Tool: `discover_instance_metadata` - Finds zone and MIG for an instance
+  - Tool: `execute_recreate_instance` - Recreates instance in Managed Instance Group
+- Server runs via stdio transport and can be started with `npm run mcp:server`
 
 ### 6. RAG System (`rag/`)
 - `retrieve.js` - Searches indexed chunks

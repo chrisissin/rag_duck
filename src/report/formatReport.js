@@ -48,16 +48,16 @@ export async function formatReport({ parsed, decision, policy = null }) {
   };
   
   // Execute MCP action if decision is AUTO_REPLACE and MCP is enabled
-  if (decision.decision === "AUTO_REPLACE" && action && process.env.ENABLE_MCP === "true") {
-    try {
-      const mcpResult = await executeMCPAction(action, parsed);
-      report.mcp_executed = true;
-      report.mcp_result = mcpResult;
-    } catch (error) {
-      report.mcp_executed = false;
-      report.mcp_error = error.message;
-    }
-  }
+  // if (decision.decision === "AUTO_REPLACE" && action && process.env.ENABLE_MCP === "true") {
+  //   try {
+  //     const mcpResult = await executeMCPAction(action, parsed);
+  //     report.mcp_executed = true;
+  //     report.mcp_result = mcpResult;
+  //   } catch (error) {
+  //     report.mcp_executed = false;
+  //     report.mcp_error = error.message;
+  //   }
+  // }
   
   return report;
 }
