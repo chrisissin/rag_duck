@@ -526,6 +526,10 @@ index 71c5e0f35504..f40f522f9942 100644
   }
 
   if (name === "create_scaling_schedule_pr") {
+    const projectId = process.env.GCP_PROJECT_ID || "YOUR_PROJECT_ID";
+    const secretManagerUrl = `https://console.cloud.google.com/security/secret-manager/secret/github-token/versions?project=${projectId}`;
+    const tokenErrorHint = ` Update the token at: ${secretManagerUrl}`;
+
     try {
       const {
         schedule,
@@ -552,7 +556,9 @@ index 71c5e0f35504..f40f522f9942 100644
         return {
           content: [{
             type: "text",
-            text: JSON.stringify({ error: "GITHUB_TOKEN environment variable is required for create_scaling_schedule_pr" })
+            text: JSON.stringify({
+              error: `GITHUB_TOKEN is not set or empty.${tokenErrorHint}`
+            })
           }],
           isError: true
         };
@@ -560,10 +566,12 @@ index 71c5e0f35504..f40f522f9942 100644
 
       const scheduleString = String(schedule).trim();
       const ticketNumber = String(scheduleName).trim();
+      const shortTimestamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12); // YYYYMMDDHHmm
+      const branchName = `${ticketNumber}-${shortTimestamp}`;
       const octokit = new Octokit({ auth: token });
 
       const timestamp = new Date().toISOString();
-      console.log(`[${timestamp}] [MCP Server] create_scaling_schedule_pr: ${owner}/${repo}, branch: ${ticketNumber}`);
+      console.log(`[${timestamp}] [MCP Server] create_scaling_schedule_pr: ${owner}/${repo}, branch: ${branchName}`);
 
       // 1. Get repo metadata to resolve actual default branch (avoids 404 when repo uses 'main' vs 'master')
       const { data: repoData } = await octokit.rest.repos.get({
@@ -588,7 +596,7 @@ index 71c5e0f35504..f40f522f9942 100644
       await octokit.rest.git.createRef({
         owner,
         repo,
-        ref: `refs/heads/${ticketNumber}`,
+        ref: `refs/heads/${branchName}`,
         sha: baseSha
       });
 
@@ -632,7 +640,7 @@ index 71c5e0f35504..f40f522f9942 100644
         path: filePath,
         message: `feat: append ${ticketNumber} scaling schedule`,
         content: Buffer.from(newContent).toString("base64"),
-        branch: ticketNumber
+        branch: branchName
       };
       if (fileSha) {
         updateParams.sha = fileSha;
@@ -644,7 +652,7 @@ index 71c5e0f35504..f40f522f9942 100644
         owner,
         repo,
         title: `feat: append ${ticketNumber} scaling schedule`,
-        head: ticketNumber,
+        head: branchName,
         base: effectiveBaseBranch,
         body: `Adds scaling schedule for ${ticketNumber}.
 
@@ -674,8 +682,16 @@ index 71c5e0f35504..f40f522f9942 100644
       const timestamp = new Date().toISOString();
       console.error(`[${timestamp}] [MCP Server] create_scaling_schedule_pr failed:`, err.message);
       let errorMsg = err.message;
-      if (err.response?.status === 404) {
-        errorMsg += " (Repo may not exist, or GITHUB_TOKEN lacks access. Ensure token has 'repo' scope and access to the organization.)";
+      // Octokit uses err.status; axios-style uses err.response?.status (401 = expired/invalid token)
+      const status = err.status ?? err.response?.status;
+      const bodyMsg = err.response?.data?.message ?? err.response?.data?.error ?? "";
+      const isTokenError = status === 401 || /bad credentials|token.*expired|invalid/i.test(String(bodyMsg));
+      if (isTokenError) {
+        errorMsg += ` (Token expired or invalid. Update at: ${secretManagerUrl})`;
+      } else if (status === 403 || status === 404) {
+        errorMsg += ` (GitHub auth may lack access. Update token if needed: ${secretManagerUrl})`;
+      } else if (status >= 400) {
+        errorMsg += ` | Update token if needed: ${secretManagerUrl}`;
       }
       return {
         content: [{

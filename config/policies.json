@@ -1,4 +1,10 @@
 {
+  "help_triggers": [
+    {"type": "regex", "pattern": "^(?:--help|-h|help)$"},
+    {"type": "regex", "pattern": "who are you"},
+    {"type": "regex", "pattern": "^(?:man|manual)$"},
+    {"type": "regex", "pattern": "what can you do"}
+  ],
   "policies": [
     {
       "alert_type": "disk_utilization_low",
@@ -40,7 +46,7 @@
         {
           "condition": {
             "instance_name": {
-              "startsWith": "some_intsance_name"
+              "startsWith": "mcoc-production-timerd"
             }
           },
           "decision": "NEEDS_APPROVAL"
@@ -165,7 +171,7 @@
         {
           "label": "Scale Up options",
           "template": "MCP:execute_gcloud_scale_up",
-          "description": "Give me the following information in this format to make you a PR for scaling up)\n-----\n```SCALEPRREQUEST\nStart: mm hh dd MM * YYYY (eq \"30 17 4 02 * 2026\" for 17:30 Feb 2nd 2026) (UTC zone)\nDuration: seconds (eq 7200 for 2 hours)\n ticket_number: ticket_number (eq Jira_000000)``` \n\n\n OR Execute a gcloud command to scale up instances immediately (get approval from @mcoc-release \n\n------",
+          "description": "Please head to #mcoc-server-scaling and give me the following information in this format to make you a PR for scaling up)\n-----\n```SCALEPRREQUEST\nStart: mm hh dd MM * YYYY (eq \"30 17 4 02 * 2026\" for 17:30 Feb 2nd 2026) (UTC zone)\nDuration: seconds (eq 7200 for 2 hours)\n ticket_number: ticket_number (eq Marvel_000000)``` \n\n\n ------",
           "gcloud_command_template": "gcloud beta compute instance-groups managed set-autoscaling mcoc-staging-login-api     --project=mcoc-preprod     --region=us-central1     --mode=on     --min-num-replicas=2     --max-num-replicas=5     --target-load-balancing-utilization=0.8     --cool-down-period=300"
         }
       ],
@@ -293,6 +299,10 @@
       "action_template": "MCP:create_scaling_schedule_pr",
       "github_owner": "explodingbarrel",
       "github_repo": "mcoc-production",
+      "pr_notify_channel": "#mcoc-be-pr",
+      "pr_notify_template": "{ticket_number} scaling {repo_name}\nPR: {pr_url}\nJira: {jira_url}\nplease get @mcoc-release to review, approve, and atlantis apply the PR",
+      "jira_base_url": "https://explodingbarrel.atlassian.net/browse/",
+      "trigger_channel_only": "#mcoc-server-scaling",
       "summary_template": "📋 *Scale PR Request Detected*\n\nI found a scaling PR request. Generating the YAML diff:\n\n{action}",
       "default_decision": "NEEDS_APPROVAL",
       "sample_texts": [

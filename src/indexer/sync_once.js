@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { ensureSecrets } from "../db/ensureSecrets.js";
 import { slackClient } from "../slack/client.js";
+import { withSlackRetry } from "../slack/retry.js";
 import { UserResolver } from "../slack/userResolver.js";
 import { listAllPublicChannels, fetchHistory, fetchThreadReplies } from "./slackFetch.js";
 import { buildThreadChunk, buildWindows } from "./chunker.js";
@@ -16,11 +17,40 @@ import { upsertChunk, getCursor, setCursor } from "../db/slackChunksRepo.js";
  */
 async function main() {
   await ensureSecrets();
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token || token.includes("replace-me") || token.includes("placeholder")) {
+    throw new Error(
+      "SLACK_BOT_TOKEN is missing or still placeholder. " +
+      "On GCP: gcloud secrets versions add slack-bot-token --data-file=- --project=YOUR_PROJECT (paste xoxb- token). " +
+      "Locally: set in .env"
+    );
+  }
   const web = slackClient();
   const resolver = new UserResolver(web);
 
-  const auth = await web.auth.test();
-  const team_id = auth.team_id;
+  const auth = await withSlackRetry(() => web.auth.test(), { operation: "auth.test", maxAttempts: 5 });
+  let team_id = process.env.SLACK_TEAM_ID || auth.team_id;
+  // Enterprise Grid: auth.test returns E-prefixed (enterprise) ID; conversations.list needs T-prefixed (workspace) ID
+  if (!team_id || !team_id.startsWith("T")) {
+    try {
+      const teamsRes = await withSlackRetry(() => web.auth.teams.list(), { operation: "auth.teams.list", maxAttempts: 3 });
+      const teams = teamsRes?.teams || [];
+      if (teams.length > 0) {
+        team_id = teams[0].id;
+        if (teams.length > 1 && !process.env.SLACK_TEAM_ID) {
+          console.log("[sync] Multiple workspaces. Using first:", teams[0].name, `(${team_id}). Set SLACK_TEAM_ID to index another.`);
+        }
+      }
+    } catch (e) {
+      console.warn("[sync] auth.teams.list failed:", e?.message);
+    }
+  }
+  if (!team_id || !team_id.startsWith("T")) {
+    throw new Error(
+      "Need workspace ID (T-prefixed). For Enterprise Grid: set SLACK_TEAM_ID to your workspace ID (from auth.teams.list). " +
+      "On GCP: add slack_team_id to terraform.tfvars and redeploy."
+    );
+  }
 
   const limit = parseInt(process.env.HISTORY_PAGE_LIMIT || "200", 10);
   const maxMessages = parseInt(process.env.MAX_MESSAGES_PER_WINDOW || "20", 10);
@@ -29,7 +59,7 @@ async function main() {
   const threadDelayMs = parseInt(process.env.SLACK_THREAD_DELAY_MS || "1000", 10);
   const embedConcurrency = parseInt(process.env.INDEXER_EMBED_CONCURRENCY || "4", 10);
 
-  const channels = await listAllPublicChannels(web);
+  const channels = await listAllPublicChannels(web, team_id);
   console.log(`Syncing ${channels.length} channels...`);
 
   for (let i = 0; i < channels.length; i++) {
@@ -147,5 +177,11 @@ async function main() {
 
 main().catch((e) => {
   console.error(e);
+  const isInternal = e?.data?.error === "internal_error";
+  if (isInternal) {
+    console.error(
+      "[sync] Slack internal_error persisted after retries. Check: 1) status.slack.com 2) Token in Secret Manager (not placeholder) 3) Enterprise Grid: set SLACK_TEAM_ID"
+    );
+  }
   process.exit(1);
 });

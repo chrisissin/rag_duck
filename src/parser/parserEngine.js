@@ -500,3 +500,9 @@ export function reloadPolicies() {
   return loadPolicies();
 }
 
+/** Get a policy by alert_type (e.g. for fallback when channel restriction fails) */
+export function getPolicyByAlertType(alertType) {
+  const policies = loadPolicies();
+  return policies.find((p) => p.alert_type === alertType) || null;
+}
+

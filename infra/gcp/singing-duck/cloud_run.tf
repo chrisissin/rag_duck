@@ -99,12 +99,34 @@ resource "google_cloud_run_v2_service" "agent" {
         }
       }
 
+      env {
+        name  = "ENABLE_MCP"
+        value = tostring(var.enable_mcp)
+      }
+      env {
+        name  = "DISABLE_SCALING_INTENT_DETECTION"
+        value = tostring(var.disable_scaling_intent_detection)
+      }
+      env {
+        name  = "DISABLE_ADD_MEMORY_DETECTION"
+        value = tostring(var.disable_add_memory_detection)
+      }
+      env {
+        name  = "DISABLE_APPROVAL_BUTTONS"
+        value = tostring(var.disable_approval_buttons)
+      }
+      env {
+        name  = "HIDE_GCLOUD_SCALE_UP_UI"
+        value = tostring(var.hide_gcloud_scale_up_ui)
+      }
+
       resources {
         limits = {
           cpu    = var.agent_cpu
           memory = var.agent_memory
         }
-        cpu_idle = true
+        cpu_idle          = true
+        startup_cpu_boost = true  # Faster cold start when scaling from zero
       }
 
       startup_probe {

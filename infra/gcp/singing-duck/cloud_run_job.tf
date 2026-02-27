@@ -60,6 +60,13 @@ resource "google_cloud_run_v2_job" "indexer" {
           name  = "SLACK_THREAD_DELAY_MS"
           value = var.indexer_thread_delay_ms
         }
+        dynamic "env" {
+          for_each = var.slack_team_id != "" ? [1] : []
+          content {
+            name  = "SLACK_TEAM_ID"
+            value = var.slack_team_id
+          }
+        }
         env {
           name = "SLACK_BOT_TOKEN"
           value_source {

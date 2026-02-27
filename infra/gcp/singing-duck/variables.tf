@@ -104,7 +104,7 @@ variable "agent_memory" {
 variable "agent_min_instances" {
   type        = number
   description = "Min agent instances (0=scale to zero, 1=always warm for faster first response)"
-  default     = 0
+  default     = 1
 }
 
 variable "indexer_cpu" {
@@ -135,4 +135,60 @@ variable "indexer_embed_concurrency" {
   type        = string
   description = "Parallel embedding requests per channel (4–6 when Ollama has OLLAMA_NUM_PARALLEL >= 4)"
   default     = "4"
+}
+
+# Custom domain (Load Balancer + Cloud DNS)
+variable "create_custom_domain" {
+  type        = bool
+  description = "Create load balancer + static IP for custom domain. Set dns_zone_name to add Cloud DNS A record."
+  default     = false
+}
+
+variable "custom_domain" {
+  type        = string
+  description = "Custom domain for the agent (e.g. bot.example.com). Required when create_custom_domain = true."
+  default     = ""
+}
+
+variable "dns_zone_name" {
+  type        = string
+  description = "Name of existing Cloud DNS managed zone. When set with create_custom_domain, creates A record."
+  default     = ""
+}
+
+variable "slack_team_id" {
+  type        = string
+  description = "Workspace ID (T-prefixed) for Enterprise Grid. Required when auth.test returns E-prefixed ID. e.g. T0G9PQBBK"
+  default     = ""
+}
+
+# Agent feature flags (match env.example)
+variable "enable_mcp" {
+  type        = bool
+  description = "Enable MCP server for GCP automation"
+  default     = true
+}
+
+variable "disable_scaling_intent_detection" {
+  type        = bool
+  description = "Disable scaling intent detection in orchestrator"
+  default     = false
+}
+
+variable "disable_add_memory_detection" {
+  type        = bool
+  description = "Disable add-memory intent detection"
+  default     = false
+}
+
+variable "disable_approval_buttons" {
+  type        = bool
+  description = "Disable approval buttons globally"
+  default     = false
+}
+
+variable "hide_gcloud_scale_up_ui" {
+  type        = bool
+  description = "For execute_gcloud_scale_up: show instruction only; hide gcloud command and Approve/Reject buttons"
+  default     = false
 }

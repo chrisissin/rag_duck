@@ -11,13 +11,19 @@ async function main() {
   const resolver = new UserResolver(web);
 
   const auth = await web.auth.test();
-  const team_id = auth.team_id;
+  let team_id = process.env.SLACK_TEAM_ID || auth.team_id;
+  if (!team_id || team_id.startsWith("E")) {
+    const teamsRes = await web.auth.teams.list();
+    const teams = teamsRes?.teams || [];
+    if (teams.length > 0) team_id = teams[0].id;
+  }
+  if (!team_id) throw new Error("Could not determine workspace (team_id). Set SLACK_TEAM_ID for Enterprise Grid.");
 
   const limit = parseInt(process.env.HISTORY_PAGE_LIMIT || "200", 10);
   const maxMessages = parseInt(process.env.MAX_MESSAGES_PER_WINDOW || "20", 10);
   const maxMinutes = parseInt(process.env.MAX_WINDOW_MINUTES || "10", 10);
 
-  const channels = await listAllPublicChannels(web);
+  const channels = await listAllPublicChannels(web, team_id);
   console.log(`Found ${channels.length} public channels bot is a member of.`);
 
   for (const ch of channels) {

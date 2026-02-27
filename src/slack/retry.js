@@ -14,13 +14,14 @@ export function withSlackRetry(fn, opts = {}) {
         const msg = e?.message ?? e?.data?.error ?? String(e);
 
         const isRateLimit = status === 429 || retryAfter > 0;
-        if (logger.warn && (process.env.DEBUG_SLACK === "1" || isRateLimit || attempt > 1)) {
-          logger.warn(`[Slack] ${operation} failed (attempt ${attempt}/${maxAttempts}): status=${status ?? "n/a"} retryAfter=${retryAfter} isRateLimit=${isRateLimit} msg=${msg?.slice?.(0, 200) ?? msg}`);
+        const isInternalError = e?.data?.error === "internal_error";
+        if (logger.warn && (process.env.DEBUG_SLACK === "1" || isRateLimit || isInternalError || attempt > 1)) {
+          logger.warn(`[Slack] ${operation} failed (attempt ${attempt}/${maxAttempts}): status=${status ?? "n/a"} error=${e?.data?.error ?? "n/a"} msg=${msg?.slice?.(0, 200) ?? msg}`);
         }
 
-        if (isRateLimit && attempt < maxAttempts) {
-          const waitMs = (retryAfter || Math.min(5 * 2 ** (attempt - 1), 60)) * 1000;
-          logger.warn?.(`[Slack] Rate limited. Waiting ${waitMs}ms before retry...`);
+        if ((isRateLimit || isInternalError) && attempt < maxAttempts) {
+          const waitMs = (retryAfter || Math.min(2 * 2 ** (attempt - 1), 30)) * 1000;
+          logger.warn?.(`[Slack] ${isInternalError ? "Internal error" : "Rate limited"}. Retrying in ${waitMs}ms...`);
           await new Promise((r) => setTimeout(r, waitMs));
           continue;
         }

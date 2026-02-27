@@ -4,12 +4,36 @@ import { fileURLToPath } from "url";
 import express from "express";
 import pkg from "@slack/bolt";
 const { App, ExpressReceiver } = pkg;
+import { WebClient } from "@slack/web-api";
+import { withSlackRetry } from "./slack/retry.js";
 import { processIncomingMessage } from "./orchestrator.js";
+import { isHelpRequest, buildHelpMessage } from "./help/buildHelpMessage.js";
 import { UserResolver } from "./slack/userResolver.js";
 import { normalizeSlackText } from "./slack/normalize.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/** Resolve channel ref (#name or C123) to channel ID for posting. Bot must be a member. */
+async function resolveChannelForPost(client, channelRef) {
+  if (!channelRef || !client) return null;
+  const ref = String(channelRef).trim();
+  if (ref.startsWith("C") && ref.length > 5) return ref;
+  const name = ref.replace(/^#/, "");
+  let cursor;
+  do {
+    const res = await client.conversations.list({
+      types: "public_channel",
+      limit: 200,
+      exclude_archived: true,
+      cursor
+    });
+    const ch = res.channels?.find((c) => c.name === name && c.is_member);
+    if (ch) return ch.id;
+    cursor = res.response_metadata?.next_cursor;
+  } while (cursor);
+  return null;
+}
 
 /** Slack limit for block element value is 2001 characters. Truncate action so JSON fits. */
 function makeButtonValue(obj, maxLength = 2000) {
@@ -40,18 +64,80 @@ const receiver = new ExpressReceiver({
   signingSecret: process.env.SLACK_SIGNING_SECRET.trim(),
 });
 
+const botToken = process.env.SLACK_BOT_TOKEN;
+const authClient = botToken ? new WebClient(botToken) : null;
+
+/** Run once at startup to verify token and surface real errors (Slack's internal_error masks token issues) */
+async function validateSlackTokenAtStartup() {
+  if (!botToken) return;
+  const hint = (msg) => `[Slack] ${msg} Ensure GCP Secret Manager has the same token as local .env.`;
+  try {
+    const r = await authClient.auth.test({ token: botToken });
+    console.log(`[Slack] Token OK: team=${r.team_id || r.team} user=${r.user_id} (bot_id=${r.bot_id})`);
+  } catch (e) {
+    const code = e?.data?.error || e?.code;
+    const isPlaceholder = botToken.includes("replace-me") || botToken.includes("placeholder");
+    if (isPlaceholder) {
+      console.error(hint("SLACK_BOT_TOKEN is still placeholder. Update Secret Manager with real xoxb- token."));
+    } else if (code === "invalid_auth" || code === "account_inactive") {
+      console.error(hint(`Token invalid or revoked (${code}). Reinstall Slack app and update Secret Manager.`));
+    } else if (code === "internal_error") {
+      console.error(
+        hint("Slack returned internal_error. Often means token/workspace mismatch. " +
+          "Copy token from working .env to GCP: echo -n 'YOUR_TOKEN' | gcloud secrets versions add slack-bot-token --data-file=- --project=PROJECT")
+      );
+    } else {
+      console.error("[Slack] auth.test failed:", code, e?.message);
+    }
+    throw e;
+  }
+}
+
+// Custom authorize with retry on internal_error (Slack transient failures during auth.test)
+async function authorizeWithRetry(source, body) {
+  if (!botToken) throw new Error("SLACK_BOT_TOKEN is not set");
+  const result = await withSlackRetry(
+    () => authClient.auth.test({ token: botToken }),
+    { operation: "auth.test", maxAttempts: 5 }
+  );
+  return {
+    botToken,
+    botUserId: result.user_id,
+    botId: result.bot_id,
+    teamId: source.teamId,
+    enterpriseId: source.enterpriseId,
+  };
+}
+
 const app = new App({
-  token: process.env.SLACK_BOT_TOKEN,
+  authorize: authorizeWithRetry,
   receiver: receiver
 });
 
-// Handle unhandled promise rejections (e.g., invalid_auth during startup)
+function isSlackInternalError(err) {
+  return err?.code === 'slack_webapi_platform_error' && err?.data?.error === 'internal_error';
+}
+
+// Keep process alive on Slack transient errors (avoids Cloud Run exit on internal_error)
 process.on('unhandledRejection', (error) => {
-  if (error.code === 'slack_webapi_platform_error' && error.data?.error === 'invalid_auth') {
-    // Suppress invalid_auth errors - expected with placeholder credentials
-    return;
+  if (error?.code === 'slack_webapi_platform_error') {
+    const slackError = error.data?.error;
+    if (slackError === 'invalid_auth') return;
+    if (slackError === 'internal_error') {
+      console.warn('[Slack] internal_error (transient). App continues. Check status.slack.com if persistent.');
+      return;
+    }
   }
   console.error('Unhandled promise rejection:', error);
+});
+
+process.on('uncaughtException', (err) => {
+  if (isSlackInternalError(err)) {
+    console.warn('[Slack] Uncaught internal_error. App continues.');
+    return;
+  }
+  console.error('Uncaught exception:', err);
+  process.exit(1);
 });
 
 // --- WEB INTERFACE ROUTES ---
@@ -64,7 +150,12 @@ receiver.app.post("/api/analyze", async (req, res) => {
     const timestamp = new Date().toISOString();
     const queryPreview = text?.length > 100 ? text.substring(0, 100) + "..." : text;
     console.log(`[${timestamp}] 📥 Query received from Web UI: "${queryPreview}"`);
-    
+
+    if (isHelpRequest(text)) {
+      const helpText = await buildHelpMessage({ channel_id: "nochannel-web-ui" });
+      return res.json({ source: "help", text: helpText, policy_result: null, rag_result: null, data: null });
+    }
+
     // Map Web UI calls to a generic channel_id or specific 'web' context
     const result = await processIncomingMessage({ text, channel_id: "nochannel-web-ui" });
     
@@ -102,13 +193,41 @@ app.event("app_mention", async ({ event, client, logger }) => {
     const queryPreview = cleanText.length > 100 ? cleanText.substring(0, 100) + "..." : cleanText;
     console.log(`[${timestamp}] 📥 Query received from Slack (channel: ${event.channel}): "${queryPreview}"`);
 
+    // Immediate feedback: add duck reaction (requires reactions:write scope)
+    client.reactions.add({ channel: event.channel, timestamp: event.ts, name: "duck" }).catch((err) => {
+      if (err?.data?.error === "missing_scope") {
+        console.warn("[reactions] Add reactions:write to your Slack app scopes for reaction feedback");
+      } else {
+        console.warn("[reactions] Failed:", err?.message || err);
+      }
+    });
+
+    if (isHelpRequest(cleanText)) {
+      const helpText = await buildHelpMessage({ channel_id: event.channel });
+      await client.chat.postMessage({
+        channel: event.channel,
+        thread_ts: event.ts,
+        text: helpText,
+      });
+      return;
+    }
+
     // Use thread_ts for conversation state tracking
     const threadTs = event.thread_ts || event.ts;
-    
-    const result = await processIncomingMessage({ 
-      text: cleanText, 
+
+    const result = await processIncomingMessage({
+      text: cleanText,
       channel_id: event.channel,
-      thread_ts: threadTs
+      thread_ts: threadTs,
+      getChannelName: async (channelId) => {
+        if (!channelId || channelId === "nochannel-web-ui") return null;
+        try {
+          const r = await client.conversations.info({ channel: channelId });
+          return r.channel?.name ?? null;
+        } catch {
+          return null;
+        }
+      },
     });
 
     const outputTimestamp = new Date().toISOString();
@@ -234,17 +353,17 @@ app.event("app_mention", async ({ event, client, logger }) => {
           const option = result.data.actionOptions[idx];
           const optionIsValid = isActionValid(option.action);
 
-          // Add section for this option
+          // Add section for this option (when hideApproveButton, show instruction only—no gcloud command)
+          const optionText = option.hideApproveButton
+            ? `*${option.label}*\n${option.description || ""}`
+            : `*${option.label}*\n${option.description ? `${option.description}\n` : ""}${option.action.substring(0, 500)}${option.action.length > 500 ? "..." : ""}`;
           blocks.push({
             type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `*${option.label}*\n${option.description ? `${option.description}\n` : ''}${option.action.substring(0, 500)}${option.action.length > 500 ? '...' : ''}`
-            }
+            text: { type: "mrkdwn", text: optionText }
           });
-          
-          // Add approve button for this option (only if valid)
-          if (optionIsValid) {
+
+          // Add approve button for this option (skip if hideApproveButton)
+          if (optionIsValid && !option.hideApproveButton) {
             blocks.push({
               type: "actions",
               elements: [
@@ -262,6 +381,9 @@ app.event("app_mention", async ({ event, client, logger }) => {
                     gcloudCommandTemplate: option.gcloudCommandTemplate || null,
                     githubOwner: option.githubOwner ?? result.data.policy?.github_owner ?? null,
                     githubRepo: option.githubRepo ?? result.data.policy?.github_repo ?? null,
+                    prNotifyChannel: result.data.policy?.pr_notify_channel ?? null,
+                    prNotifyTemplate: result.data.policy?.pr_notify_template ?? null,
+                    jiraBaseUrl: result.data.policy?.jira_base_url ?? null,
                     parsed: result.data.parsed,
                     decision: result.data.decision,
                     message_ts: event.ts,
@@ -273,27 +395,30 @@ app.event("app_mention", async ({ event, client, logger }) => {
             });
           }
         }
-        
-        // Add a single reject button at the end
-        blocks.push({
-          type: "actions",
-          elements: [
-            {
-              type: "button",
-              text: {
-                type: "plain_text",
-                text: "❌ Reject All"
-              },
-              style: "danger",
-              value: JSON.stringify({
-                parsed: result.data.parsed,
-                message_ts: event.ts
-              }),
-              action_id: "reject_action"
-            }
-          ]
-        });
-      } 
+
+        // Add Reject All only when at least one option has an Approve button (skip if all options have hideApproveButton)
+        const anyOptionHasApprove = result.data.actionOptions.some((opt) => !opt.hideApproveButton && isActionValid(opt.action));
+        if (anyOptionHasApprove) {
+          blocks.push({
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                text: {
+                  type: "plain_text",
+                  text: "❌ Reject All"
+                },
+                style: "danger",
+                value: JSON.stringify({
+                  parsed: result.data.parsed,
+                  message_ts: event.ts
+                }),
+                action_id: "reject_action"
+              }
+            ]
+          });
+        }
+      }
       // Single action (legacy format)
       else {
         if (result.data.action) {
@@ -325,6 +450,9 @@ app.event("app_mention", async ({ event, client, logger }) => {
                   gcloudCommandTemplate: result.data.policy?.gcloud_command_template || null,
                   githubOwner: result.data.policy?.github_owner || null,
                   githubRepo: result.data.policy?.github_repo || null,
+                  prNotifyChannel: result.data.policy?.pr_notify_channel ?? null,
+                  prNotifyTemplate: result.data.policy?.pr_notify_template ?? null,
+                  jiraBaseUrl: result.data.policy?.jira_base_url ?? null,
                   parsed: result.data.parsed,
                   decision: result.data.decision,
                   message_ts: event.ts
@@ -463,11 +591,15 @@ app.event("app_mention", async ({ event, client, logger }) => {
     }
   } catch (err) {
     logger.error(err);
+    const isSlackInternal = err.code === 'slack_webapi_platform_error' && err.data?.error === 'internal_error';
+    const userMessage = isSlackInternal
+      ? "Slack had a temporary hiccup. Please try again in a moment."
+      : "Error while processing (check server logs).";
     try {
       await client.chat.postMessage({
         channel: event.channel,
         thread_ts: event.ts,
-        text: "Error while processing (check server logs).",
+        text: userMessage,
       });
     } catch {}
   }
@@ -479,7 +611,7 @@ app.action("approve_action", async ({ ack, body, client, logger }) => {
   
   try {
     const value = JSON.parse(body.actions[0].value);
-    const { action, actionTemplate, actionLabel, parsed, decision, githubOwner, githubRepo } = value;
+    const { action, actionTemplate, actionLabel, parsed, decision, githubOwner, githubRepo, prNotifyChannel, prNotifyTemplate, jiraBaseUrl } = value;
     
     // Debug: Log action template for troubleshooting
     if (!actionTemplate) {
@@ -586,7 +718,36 @@ app.action("approve_action", async ({ ack, body, client, logger }) => {
             repo: githubRepo
           });
           if (executionResult.success && executionResult.prUrl) {
-            executionResult.output = `PR created: ${executionResult.prUrl}`;
+            executionResult.output = `PR created: ${executionResult.prUrl} please get @mcoc-release to review, approve, and atlantis apply the PR`;
+
+            // Post to notify channel if configured
+            if (prNotifyChannel && prNotifyTemplate) {
+              try {
+                const channelId = await resolveChannelForPost(client, prNotifyChannel);
+                if (channelId) {
+                  const ticketNumber = parsed.ticket_number || parsed.name || parsed.schedule_name || "";
+                  const jiraUrl = jiraBaseUrl && ticketNumber
+                    ? `${jiraBaseUrl.replace(/\/$/, "")}/${encodeURIComponent(ticketNumber.trim())}`
+                    : "";
+                  const notifyText = prNotifyTemplate
+                    .replace(/\{ticket_number\}/g, ticketNumber)
+                    .replace(/\{pr_url\}/g, executionResult.prUrl)
+                    .replace(/\{jira_url\}/g, jiraUrl)
+                    .replace(/\{repo_name\}/g, githubRepo || "")
+                    .replace(/\{github_owner\}/g, githubOwner || "");
+                  await client.chat.postMessage({
+                    channel: channelId,
+                    text: notifyText,
+                    blocks: [{ type: "section", text: { type: "mrkdwn", text: notifyText } }]
+                  });
+                  console.log(`[PR notify] Posted to #${prNotifyChannel.replace(/^#/, "")}`);
+                } else {
+                  console.warn(`[PR notify] Channel not found or bot not a member: ${prNotifyChannel}`);
+                }
+              } catch (err) {
+                console.warn("[PR notify] Failed to post:", err?.message || err);
+              }
+            }
           }
         } catch (error) {
           executionResult = {
@@ -816,22 +977,20 @@ app.action("search_all_channels", async ({ ack, body, client, logger, action }) 
 
 (async () => {
   try {
+    await validateSlackTokenAtStartup();
     const port = process.env.PORT || 3000;
     await app.start(port);
     console.log(`⚡️ Combined Bot & Web UI running on port ${port}`);
     console.log(`   - Slack Events: http://localhost:${port}/slack/events`);
     console.log(`   - Web UI: http://localhost:${port}/`);
     console.log(`   - API: http://localhost:${port}/api/analyze`);
-    
-    // Check if credentials are set (basic validation)
-    const botToken = process.env.SLACK_BOT_TOKEN?.trim();
-    if (!botToken || botToken.includes('placeholder')) {
-      console.log('⚠️  Warning: Using placeholder SLACK_BOT_TOKEN. Update your .env file with real token.');
-    }
   } catch (error) {
     if (error.code === 'EADDRINUSE') {
       console.error(`❌ Port ${process.env.PORT || 3000} is already in use.`);
       console.error('   Stop the existing process or use a different PORT.');
+    } else if (error?.data?.error || error?.code === 'slack_webapi_platform_error') {
+      // Slack auth error - message already logged by validateSlackTokenAtStartup
+      console.error('❌ Slack token validation failed. See above for fix.');
     } else {
       console.error('Failed to start server:', error);
     }

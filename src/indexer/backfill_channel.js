@@ -23,7 +23,13 @@ async function main() {
   const resolver = new UserResolver(web);
 
   const auth = await web.auth.test();
-  const team_id = auth.team_id;
+  let team_id = process.env.SLACK_TEAM_ID || auth.team_id;
+  if (!team_id || team_id.startsWith("E")) {
+    const teamsRes = await web.auth.teams.list();
+    const teams = teamsRes?.teams || [];
+    if (teams.length > 0) team_id = teams[0].id;
+  }
+  if (!team_id) throw new Error("Could not determine workspace (team_id). Set SLACK_TEAM_ID for Enterprise Grid.");
 
   const limit = parseInt(process.env.HISTORY_PAGE_LIMIT || "200", 10);
   const maxMessages = parseInt(process.env.MAX_MESSAGES_PER_WINDOW || "20", 10);
@@ -35,7 +41,7 @@ async function main() {
 
   // If it doesn't look like a channel ID (starts with C), try to find by name
   if (!channelArg.startsWith("C")) {
-    const channels = await listAllPublicChannels(web);
+    const channels = await listAllPublicChannels(web, team_id);
     const found = channels.find(c => c.name === channelArg || c.name === `#${channelArg}`);
     if (!found) {
       console.error(`Channel "${channelArg}" not found. Available channels:`);

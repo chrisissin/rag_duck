@@ -28,6 +28,16 @@ output "ollama_url" {
   description = "Ollama Cloud Run service URL (when create_ollama_service = true)"
 }
 
+output "custom_domain_url" {
+  value       = var.create_custom_domain && var.custom_domain != "" ? "https://${var.custom_domain}" : null
+  description = "Custom domain URL (when create_custom_domain = true)"
+}
+
+output "custom_domain_lb_ip" {
+  value       = var.create_custom_domain ? google_compute_global_forwarding_rule.agent_https[0].ip_address : null
+  description = "Load balancer static IP — for manual DNS A record if not using dns_zone_name"
+}
+
 output "next_steps" {
   value = join("\n", concat([
     "1. Set Slack secrets: gcloud secrets versions add slack-bot-token --data-file=- (paste token)",

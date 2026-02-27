@@ -1,7 +1,7 @@
 # Copy to terraform.tfvars and adjust.
 # project_id must match your GCP project (e.g. singing-duck).
 
-project_id = "singing-duck"
+project_id = "sparx-sandbox"
 region     = "us-central1"
 db_tier    = "db-f1-micro"
 db_name    = "slack_rag"
@@ -43,11 +43,5 @@ indexer_schedule = "*/30 * * * *"
 # dns_zone_name      = "my-zone"  # Creates A record when set
 
 # Enterprise Grid: workspace ID (T-prefixed) when auth.test returns E-prefixed. Get from auth.teams.list or Slack admin.
-# slack_team_id = "T0G9PQBBK"
-
-# Agent feature flags (match env.example)
-# enable_mcp                    = true   # MCP server for GCP automation
-# disable_scaling_intent_detection = false
-# disable_add_memory_detection   = false
-# disable_approval_buttons       = false
-# hide_gcloud_scale_up_ui        = false # When true: hide gcloud cmd + Approve/Reject for execute_gcloud_scale_up
+# slack_team_id = "ERTQ7T98W"T015X06654Y ERTQ7T98W
+slack_team_id = "ERTQ7T98W"

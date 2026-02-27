@@ -5,15 +5,23 @@ import { withSlackRetry } from "../slack/retry.js";
 
 export { withSlackRetry };
 
-export async function listAllPublicChannels(web) {
+export async function listAllPublicChannels(web, team_id) {
   let cursor = undefined;
   const channels = [];
+  const baseParams = {
+    limit: 200,
+    types: "public_channel",
+    exclude_archived: true
+  };
+  // Pass team_id only when it's a workspace ID (T-prefixed). Enterprise install returns E-prefixed
+  // IDs that cause team_access_not_granted, so we omit team_id for those.
+  if (team_id && team_id.startsWith("T")) {
+    baseParams.team_id = team_id;
+  }
   while (true) {
     const res = await withSlackRetry(() => web.conversations.list({
-      limit: 200,
-      cursor,
-      types: "public_channel",
-      exclude_archived: true
+      ...baseParams,
+      cursor
     }), { operation: "conversations.list" });
     if (res?.channels?.length) channels.push(...res.channels);
     cursor = res?.response_metadata?.next_cursor;

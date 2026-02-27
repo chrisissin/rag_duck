@@ -1,6 +1,6 @@
 import { generateTerragruntAutoscalerDiff, generateMachineTypeDiff } from "./mcpClient.js";
 
-async function formatActionTemplate(template, parsed, originalText = null, isGitPR = false, gcloudCommandTemplate = null, policy = null) {
+async function formatActionTemplate(template, parsed, originalText = null, isGitPR = false, gcloudCommandTemplate = null, policy = null, actionDescription = null) {
   if (!template) {
     return null;
   }
@@ -21,13 +21,15 @@ name: scale up name (eq big sale)
     }
     
     if (mcpTool === "execute_gcloud_scale_up") {
-      // For GCP command scale-up, just format the command for display
-      // DO NOT execute it here - execution happens only when user approves in server.js
+      const hideGcloudUi = process.env.HIDE_GCLOUD_SCALE_UP_UI === "true";
+      if (hideGcloudUi) {
+        // Show instruction only; hide gcloud command. Server.js will hide Approve/Reject via hideApproveButton.
+        return actionDescription || null;
+      }
+      // For GCP command scale-up, format the command for display
       if (!gcloudCommandTemplate) {
         return `*GCP Scale-Up Command:*\n\n❌ No gcloud command template found in policy. Please add \`gcloud_command_template\` to the action template.`;
       }
-      
-      // Just return the formatted command string for display
       return `*GCP Scale-Up Command:*\n\`\`\`\n${gcloudCommandTemplate.trim()}\n\`\`\`\n\n✅ Ready to execute when approved`;
     }
     
@@ -213,20 +215,25 @@ export async function formatReport({ parsed, decision, policy = null, originalTe
                       (actionTemplate.template?.includes("terragrunt_autoscaler_diff") && 
                        !actionTemplate.template?.includes("execute_gcloud")));
       const formattedAction = await formatActionTemplate(
-        actionTemplate.template, 
-        parsed, 
+        actionTemplate.template,
+        parsed,
         originalText,
         isGitPR,
-        actionTemplate.gcloud_command_template || null
+        actionTemplate.gcloud_command_template || null,
+        policy,
+        actionTemplate.description || null
       );
-      
+
       if (formattedAction) {
+        const hideGcloudUi = process.env.HIDE_GCLOUD_SCALE_UP_UI === "true";
+        const isGcloudScaleUp = actionTemplate.template?.includes("execute_gcloud_scale_up");
         actionList.push({
           label: actionTemplate.label || "Action",
           description: actionTemplate.description || "",
           template: actionTemplate.template,
           gcloudCommandTemplate: actionTemplate.gcloud_command_template || null,
-          action: formattedAction
+          action: formattedAction,
+          hideApproveButton: hideGcloudUi && isGcloudScaleUp
         });
       }
     }
